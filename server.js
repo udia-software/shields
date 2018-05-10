@@ -45,7 +45,6 @@ const {
 const {
   currencyFromCode,
   metric,
-  ordinalNumber,
   starRating,
   omitv,
   addv: versionText,
@@ -1067,6 +1066,38 @@ cache(function(data, match, sendBadge, request) {
   }
 }));
 
+// LGTM alerts integration
+camp.route(/^\/lgtm\/alerts\/(.+)\.(svg|png|gif|jpg|json)$/,
+cache(function(data, match, sendBadge, request) {
+  const projectId = match[1]; // eg, `g/apache/cloudstack`
+  const format = match[2];
+  const url = 'https://lgtm.com/api/v0.1/project/' + projectId + '/details';
+  const badgeData = getBadgeData('lgtm', data);
+  request(url, function(err, res, buffer) {
+    if (checkErrorResponse(badgeData, err, res, 'project not found')) {
+      sendBadge(format, badgeData);
+      return;
+    }
+    try {
+      const data = JSON.parse(buffer);
+      if (!('alerts' in data))
+        throw new Error("Invalid data");
+      badgeData.text[1] = metric(data.alerts) + (data.alerts === 1 ? ' alert' : ' alerts');
+
+      if (data.alerts === 0) {
+        badgeData.colorscheme = 'brightgreen';
+      } else {
+        badgeData.colorscheme = 'yellow';
+      }
+      sendBadge(format, badgeData);
+
+    } catch(e) {
+      badgeData.text[1] = 'invalid';
+      sendBadge(format, badgeData);
+    }
+  });
+}));
+
 // Gratipay integration.
 camp.route(/^\/(?:gittip|gratipay(\/user|\/team|\/project)?)\/(.*)\.(svg|png|gif|jpg|json)$/,
 cache(function(queryParams, match, sendBadge, request) {
@@ -1610,39 +1641,6 @@ cache(function(data, match, sendBadge, request) {
   });
 }));
 
-// CDNJS version integration
-camp.route(/^\/cdnjs\/v\/(.*)\.(svg|png|gif|jpg|json)$/,
-cache(function(data, match, sendBadge, request) {
-  const library = encodeURIComponent(match[1]);  // eg, "express" or "@user/express"
-  const format = match[2];
-  const apiUrl = 'https://api.cdnjs.com/libraries/' + library + '?fields=version';
-  const badgeData = getBadgeData('cdnjs', data);
-  request(apiUrl, function(err, res, buffer) {
-    if (err != null) {
-      badgeData.text[1] = 'inaccessible';
-      sendBadge(format, badgeData);
-      return;
-    }
-    try {
-      const json = JSON.parse(buffer);
-      if (Object.keys(json).length === 0) {
-        /* Note the 'not found' response from cdnjs is:
-           status code = 200, body = {} */
-        badgeData.text[1] = 'not found';
-        sendBadge(format, badgeData);
-        return;
-      }
-      const version = json.version || 0;
-      badgeData.text[1] = versionText(version);
-      badgeData.colorscheme = versionColor(version);
-      sendBadge(format, badgeData);
-    } catch(e) {
-      badgeData.text[1] = 'invalid';
-      sendBadge(format, badgeData);
-    }
-  });
-}));
-
 // npm weekly download integration.
 mapNpmDownloads({ camp, cache }, 'dw', 'last-week');
 
@@ -2066,181 +2064,6 @@ cache(function(data, match, sendBadge, request) {
       badgeData.colorscheme = versionColor(version);
       sendBadge(format, badgeData);
     } catch(e) {
-      badgeData.text[1] = 'invalid';
-      sendBadge(format, badgeData);
-    }
-  });
-}));
-
-// Gem version integration.
-camp.route(/^\/gem\/v\/(.*)\.(svg|png|gif|jpg|json)$/,
-cache(function(data, match, sendBadge, request) {
-  var repo = match[1];  // eg, `formatador`.
-  var format = match[2];
-  var apiUrl = 'https://rubygems.org/api/v1/gems/' + repo + '.json';
-  var badgeData = getBadgeData('gem', data);
-  request(apiUrl, function(err, res, buffer) {
-    if (checkErrorResponse(badgeData, err, res)) {
-      sendBadge(format, badgeData);
-      return;
-    }
-    try {
-      var data = JSON.parse(buffer);
-      var version = data.version;
-      badgeData.text[1] = versionText(version);
-      badgeData.colorscheme = versionColor(version);
-      sendBadge(format, badgeData);
-    } catch(e) {
-      badgeData.text[1] = 'invalid';
-      sendBadge(format, badgeData);
-    }
-  });
-}));
-
-// Gem download count
-camp.route(/^\/gem\/(dt|dtv|dv)\/(.*)\.(svg|png|gif|jpg|json)$/,
-cache(function(data, match, sendBadge, request) {
-  var info = match[1];  // either dt, dtv or dv.
-  var repo = match[2];  // eg, "rails"
-  var splited_url = repo.split('/');
-  repo = splited_url[0];
-  var version = (splited_url.length > 1)
-    ? splited_url[splited_url.length - 1]
-    : null;
-  version = (version === "stable") ? version : semver.valid(version);
-  var format = match[3];
-
-  let leftSide;
-  if (version) {
-    leftSide = 'downloads@' + version;
-  } else {
-    if (info === "dtv") {
-      leftSide = 'downloads@latest';
-    } else {
-      leftSide = 'downloads';
-    }
-  }
-  const badgeData = getBadgeData(leftSide, data);
-
-  if  (info === "dv"){
-    apiUrl = 'https://rubygems.org/api/v1/versions/' + repo + '.json';
-  } else {
-    var  apiUrl = 'https://rubygems.org/api/v1/gems/' + repo + '.json';
-  }
-  var parameters = {
-    headers: {
-      'Accept': 'application/atom+json,application/json'
-    }
-  };
-  request(apiUrl, parameters, function(err, res, buffer) {
-    if (checkErrorResponse(badgeData, err, res)) {
-      sendBadge(format, badgeData);
-      return;
-    }
-    try {
-      var data = JSON.parse(buffer);
-      var downloads;
-      if (info === "dt") {
-        downloads = metric(data.downloads);
-      } else if (info === "dtv") {
-        downloads = metric(data.version_downloads);
-      } else if (info === "dv") {
-        downloads = "invalid";
-
-        var version_data;
-        if (version !== null && version === "stable") {
-
-          var versions = data.filter(function(ver) {
-            return ver.prerelease === false;
-          }).map(function(ver) {
-            return ver.number;
-          });
-          // Found latest stable version.
-          var stable_version = latestVersion(versions);
-          version_data = data.filter(function(ver) {
-            return ver.number === stable_version;
-          })[0];
-          downloads = metric(version_data.downloads_count);
-
-        } else if (version !== null) {
-
-          version_data = data.filter(function(ver) {
-            return ver.number === version;
-          })[0];
-
-          downloads = metric(version_data.downloads_count);
-        }
-      } else { downloads = "invalid"; }
-      badgeData.text[1] = downloads;
-      badgeData.colorscheme = downloadCountColor(downloads);
-      sendBadge(format, badgeData);
-    } catch(e) {
-      badgeData.text[1] = 'invalid';
-      sendBadge(format, badgeData);
-    }
-  });
-}));
-
-// Gem owner stats
-camp.route(/^\/gem\/u\/(.*)\.(svg|png|gif|jpg|json)$/,
-cache(function(data, match, sendBadge, request) {
-  var user = match[1]; // eg, "raphink"
-  var format = match[2];
-  var url = 'https://rubygems.org/api/v1/owners/' + user + '/gems.json';
-  var badgeData = getBadgeData('gems', data);
-  request(url, function(err, res, buffer) {
-    if (checkErrorResponse(badgeData, err, res)) {
-      sendBadge(format, badgeData);
-      return;
-    }
-    try {
-      var data = JSON.parse(buffer);
-      var count = data.length;
-      badgeData.colorscheme = floorCountColor(count, 10, 50, 100);
-      badgeData.text[1] = count;
-      sendBadge(format, badgeData);
-    } catch (e) {
-      badgeData.text[1] = 'invalid';
-      sendBadge(format, badgeData);
-    }
-  });
-}));
-
-
-// Gem ranking
-camp.route(/^\/gem\/(rt|rd)\/(.*)\.(svg|png|gif|jpg|json)$/,
-cache(function(data, match, sendBadge, request) {
-  var info = match[1]; // either rt or rd
-  var repo = match[2]; // eg, "rspec-puppet-facts"
-  var format = match[3];
-  var url = 'http://bestgems.org/api/v1/gems/' + repo;
-  var totalRank = (info === 'rt');
-  var dailyRank = (info === 'rd');
-  if (totalRank) {
-    url += '/total_ranking.json';
-  } else if (dailyRank) {
-    url += '/daily_ranking.json';
-  }
-  var badgeData = getBadgeData('rank', data);
-  request(url, function(err, res, buffer) {
-    if (checkErrorResponse(badgeData, err, res)) {
-      sendBadge(format, badgeData);
-      return;
-    }
-    try {
-      var data = JSON.parse(buffer);
-      var rank;
-      if (totalRank) {
-        rank = data[0].total_ranking;
-      } else if (dailyRank) {
-        rank = data[0].daily_ranking;
-      }
-      var count = Math.floor(100000 / rank);
-      badgeData.colorscheme = floorCountColor(count, 10, 50, 100);
-      badgeData.text[1] = ordinalNumber(rank);
-      badgeData.text[1] += totalRank? '': ' daily';
-      sendBadge(format, badgeData);
-    } catch (e) {
       badgeData.text[1] = 'invalid';
       sendBadge(format, badgeData);
     }
